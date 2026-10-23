@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>State of Being — Brochure</title>
+<style>
+  /*
+    Sheet model: the poster (page2.jpg) is the FRONT of the sheet, split into
+    four panels. Each panel's BACK shows page1.jpg, mirrored left/right
+    (that's how a sheet flips over). The folds rotate the panels in 3D, so
+    page 1's upside-down panels come out upright exactly like real paper.
+
+        TL | TR       BR stays put. TL/TR fold down over BL/BR (top→bottom),
+        ---+---       then the left half folds over the right (left→right).
+        BL | BR
+  */
+  :root {
+    --bg: #ffffff;
+    --w: 200px;               /* one panel width; set by JS */
+    --h: calc(var(--w) * 1.5);/* panels are 2:3 (6 × 9 in) */
+    --ease: cubic-bezier(.6, .05, .25, 1);
+    --dur: 900ms;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+
+  .scene {
+    position: relative;
+    width: 100%; height: 100%;
+    perspective: 2600px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  /* Full open sheet (2w × 2h), centered; JS moves/scales it to frame each state */
+  .sheet {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: calc(var(--w) * 2); height: calc(var(--h) * 2);
+    margin-left: calc(var(--w) * -1); margin-top: calc(var(--h) * -1);
+    transform-style: preserve-3d;
+    transition: transform var(--dur) var(--ease);
+  }
+
+  .panel {
+    position: absolute;
+    width: var(--w); height: var(--h);
+    transform-style: preserve-3d;
+    transition: transform var(--dur) var(--ease);
+  }
+  .face {
+    position: absolute; inset: 0;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    background-size: 200% 200%;
+    background-repeat: no-repeat;
+  }
+  .front { background-image: url(page2.jpg); }
+  .back  { background-image: url(page1.jpg); transform: rotateY(180deg); }
+
+  /* ---------- paper feel ---------- */
+  /* crease shading: each face darkens softly toward the fold lines it touches.
+     --cx / --cy point away from the vertical / horizontal crease. */
+  .face::before,
+  .face::after {
+    content: ""; position: absolute; inset: 0;
+    pointer-events: none;
+    mix-blend-mode: multiply;
+  }
+  .face::before {
+    background:
+      linear-gradient(var(--cx), rgba(70, 50, 10, .16), rgba(70, 50, 10, .05) 4%, transparent 16%),
+      linear-gradient(var(--cy), rgba(70, 50, 10, .12), rgba(70, 50, 10, .04) 3%, transparent 12%);
+  }
+  /* grain */
+  .face::after {
+    opacity: .09;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5  0 0 0 0 .45  0 0 0 0 .35  0 0 0 1.2 -.2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 220px 220px;
+  }
+  /* the back is mirrored, so its vertical crease is on the opposite side */
+  .tl > .front, .bl > .front { --cx: to left;  }
+  .tr > .front, .br > .front { --cx: to right; }
+  .tl > .back,  .bl > .back  { --cx: to right; }
+  .tr > .back,  .br > .back  { --cx: to left;  }
+  .tl > .face, .tr > .face { --cy: to top; }
+  .bl > .face, .br > .face { --cy: to bottom; }
+
+  /* soft shadow under whatever part of the sheet is showing */
+  .shadow {
+    position: absolute;
+    left: var(--w); top: var(--h); width: var(--w); height: var(--h);
+    transform: translateZ(-2px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, .06), 0 18px 40px -8px rgba(0, 0, 0, .18);
+    transition: opacity .5s ease;
+  }
+  /* hide it while the paper moves, then fade it back in at the new size */
+  .turning .shadow { opacity: 0; transition: opacity .12s ease; }
+  [data-state="1"] .shadow { left: 0; width: calc(var(--w) * 2); }
+  [data-state="2"] .shadow { left: 0; top: 0; width: calc(var(--w) * 2); height: calc(var(--h) * 2); }
+
+  /* panels dim a little mid-turn, as they tilt away from the light */
+  @keyframes turn-shade { 50% { filter: brightness(.86); } }
+  [data-moving~="side"] .bl > .face,
+  [data-moving~="side"] .tl > .face,
+  [data-moving~="top"]  .tl > .face,
+  [data-moving~="top"]  .tr > .face { animation: turn-shade var(--dur) var(--ease) both; }
+
+  /* poster quadrants on the front; mirrored quadrants of page 1 on the back */
+  .tl > .front { background-position:   0%   0%; }  .tl > .back { background-position: 100%   0%; }
+  .tr > .front { background-position: 100%   0%; }  .tr > .back { background-position:   0%   0%; }
+  .bl > .front { background-position:   0% 100%; }  .bl > .back { background-position: 100% 100%; }
+  .br > .front { background-position: 100% 100%; }  .br > .back { background-position:   0% 100%; }
+
+  /* Hierarchy: BR is the anchor. TR hangs off BR's top edge,
+     BL off BR's left edge, and TL off BL's top edge. */
+  .br { left: var(--w); top: var(--h); }
+  .tr { left: 0; top: calc(var(--h) * -1); transform-origin: 50% 100%; }
+  .bl { left: calc(var(--w) * -1); top: 0; transform-origin: 100% 50%; }
+  .tl { left: 0; top: calc(var(--h) * -1); transform-origin: 50% 100%; }
+
+  /* ---------- states ----------
+     0 closed · 1 opened left→right · 2 fully open
+     Small translateZ values keep the stacked layers from z-fighting. */
+  [data-state="0"] .tr,
+  [data-state="0"] .tl,
+  [data-state="1"] .tr,
+  [data-state="1"] .tl { transform: translateZ(1px) rotateX(-180deg); }
+  [data-state="0"] .bl { transform: translateZ(4px) rotateY(180deg); }
+
+  /* sequencing: opening → left/right first, then top/bottom.
+     closing → top/bottom first, then left/right. */
+  [data-dir="open"]  .tl, [data-dir="open"]  .tr { transition-delay: calc(var(--dur) * .15); }
+  [data-dir="close-all"] .bl { transition-delay: calc(var(--dur) * .85); }
+  [data-dir="open"][data-moving~="top"] .tl > .face,
+  [data-dir="open"][data-moving~="top"] .tr > .face { animation-delay: calc(var(--dur) * .15); }
+  [data-dir="close-all"] .bl > .face { animation-delay: calc(var(--dur) * .85); }
+
+  .no-anim, .no-anim * { transition: none !important; animation: none !important; }
+
+  .hint {
+    position: absolute; left: 0; right: 0; bottom: 16px;
+    text-align: center;
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    color: #888;
+    pointer-events: none;
+    transition: opacity .4s;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :root { --dur: 1ms; }
+  }
+</style>
+</head>
+<body>
+  <div class="scene no-anim" id="scene" data-state="0" data-dir="open"
+       role="button" tabindex="0" aria-label="Brochure — click to unfold">
+    <div class="sheet" id="sheet">
+      <div class="shadow"></div>
+      <div class="panel br">
+        <div class="face front"></div><div class="face back"></div>
+        <div class="panel tr">
+          <div class="face front"></div><div class="face back"></div>
+        </div>
+        <div class="panel bl">
+          <div class="face front"></div><div class="face back"></div>
+          <div class="panel tl">
+            <div class="face front"></div><div class="face back"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="hint" id="hint">Click to unfold</div>
+  </div>
+
+<script>
+  const scene = document.getElementById('scene');
+  const sheet = document.getElementById('sheet');
+  const hint  = document.getElementById('hint');
+  const hints = ['Click to unfold', 'Click to open fully', 'Click to fold up'];
+  let state = 0;
+
+  // Visible area of each state, in panel units, relative to the sheet's center:
+  // closed = just BR, state 1 = bottom row, state 2 = whole sheet.
+  const frames = [
+    { cx: .5, cy: .5, w: 1, h: 1 },
+    { cx: 0,  cy: .5, w: 2, h: 1 },
+    { cx: 0,  cy: 0,  w: 2, h: 2 },
+  ];
+
+  let panelW = 200;
+  function layout() {
+    const vw = scene.clientWidth, vh = scene.clientHeight - 40;
+    // size panels so the fully open poster fits
+    panelW = Math.floor(Math.min(vw / 2, vh / 3) * 0.92);
+    document.documentElement.style.setProperty('--w', panelW + 'px');
+    frame();
+  }
+
+  function frame() {
+    const f = frames[state];
+    const pw = panelW, ph = panelW * 1.5;
+    const vw = scene.clientWidth, vh = scene.clientHeight - 40;
+    // zoom in on smaller states, capped so the closed brochure doesn't get huge
+    const s = Math.min(vw * .92 / (f.w * pw), vh * .92 / (f.h * ph), 1.6);
+    sheet.style.transform =
+      `scale(${s}) translate(${-f.cx * pw}px, ${-f.cy * ph}px)`;
+  }
+
+  function go(next) {
+    scene.dataset.dir = next > state ? 'open' : (state === 2 && next === 0 ? 'close-all' : 'close');
+    // which hinges turn: the side fold crosses 0↔1, the top fold crosses 1↔2
+    const moving = [];
+    if ((state === 0) !== (next === 0)) moving.push('side');
+    if ((state === 2) !== (next === 2)) moving.push('top');
+    delete scene.dataset.moving;
+    void scene.offsetWidth; // restart the shade animation
+    scene.dataset.moving = moving.join(' ');
+    const dur = parseFloat(getComputedStyle(scene).getPropertyValue('--dur'));
+    scene.classList.add('turning');
+    clearTimeout(go.timer);
+    go.timer = setTimeout(() => scene.classList.remove('turning'),
+                          dur * (moving.length === 2 ? 1.85 : 1.15));
+    state = next;
+    scene.dataset.state = state;
+    hint.textContent = hints[state];
+    frame();
+  }
+
+  scene.addEventListener('click', () => go((state + 1) % 3));
+  scene.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); go((state + 1) % 3); }
+    if (e.key === 'ArrowLeft' && state > 0) go(state - 1);
+  });
+  addEventListener('resize', layout);
+  layout();
+  const start = +new URLSearchParams(location.search).get('state');
+  if (start === 1 || start === 2) go(start);
+  requestAnimationFrame(() => requestAnimationFrame(() => scene.classList.remove('no-anim')));
+</script>
+</body>
+</html>
